@@ -1,0 +1,33 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=1179
+
+The focus of this script is to provide context-sensitive word completion - taking advantage of the popular ctags utility and Vim's built-in perl features. 
+
+Suppose you have an instance of an object (o), and you've typed:
+
+o.set_
+
+While you are still in insert mode, press CTRL-J, and this script will then look up the first member of that object that starts with "set_" and complete it for you, like this:
+
+o.set_range(integer max, integer min)
+
+If this isn't the completion that you want, then press CTRL-J again for the next member that starts with "set_":
+
+o.set_name(string name)
+
+and again for the next one:
+
+o.set_value
+
+If you've gone too far then you can go back with CTRL-K. After each completion you are left in insert mode - so you can just continue typing when you've found the one you want.
+
+The object can also be replaced with a struct, class, 'this', or 'super'.
+
+Completions can also be made after the open parentheses to complete the list of parameters:
+
+o.set_range(<c-j>
+
+Or after the function:
+
+o.get_name().compar<c-j>
+
+Pressing CTRL-S will skip through the function parameters, visually selecting each in turn - useful for filling in the parameters after completing a function.
