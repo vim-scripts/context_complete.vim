@@ -1,7 +1,7 @@
 *context_complete.txt*    Context-Sensitive Word Completion
 
 		By Dave Eggum (deggum@synopsys.com)
-			    Version: 0.4
+			    Version: 0.5
 		Last Change: Mon Jan 31 10:07:01 PST 2005
 
 Contents:
@@ -18,8 +18,7 @@ CUtils::complete_this) and structs.
 ==============================================================================
 USAGE                                                 *context_complete-usage*
 
-The usage of this script is modeled after vim's |insert_expand| feature and is
-best explained with an example...
+The usage of this script is modeled after vim's |insert_expand| feature.
 
 Suppose you have an instance of an object (o), and you've typed:
 
@@ -44,11 +43,10 @@ If you've gone too far then you can go back with CTRL-K. After each completion
 you are left in insert mode - so you can just continue typing when you've
 found the one you want.
 
-This script looks up the type of the object instance before the "." or "->" by
-first looking for a local definition, if it doesn't find one then it looks in
-the tag file. If it finds more than one object type in the tags file, then it
-will provide completions for the first one it finds.  If it chooses the wrong
-type, then press CTRL-L to move to the next object definition.
+Occasionally there are several matching contenders for the object type. Press
+CTRL-L to cycle through them.
+
+The object can also be replaced with a struct, 'this', or 'super'.
 
 ==============================================================================
 SETUP                                               *context_complete-setup*
@@ -74,49 +72,65 @@ for a listing of all the options available for each language. You then need to
 set the |'tags'| option to point to your tags file.
 
 Binary searching is used for speedy tag lookups. The caveat of this is that
-the tags file must be sorted - which ctags does for you by default.
+the tags file must be sorted - which ctags does for you by default - just
+don't turn it off.
 
 Notice that after time, your tags file will be out of date with the current
 version of your code. All you have to do is run ctags again to get a new
 picture of your environment. Vim's built-in tag features requires that you do
 this anyway...
 
+Vim's |gd| and |[[| motions are used to find the definition of local variables
+and the start of the current function.  If you are not satisfied with how well
+they work for your language, then just |map| those commands to something else!
+But please see |gd| and |[[| for clues before you do that.
+
+For instance, |[[| searches backwards for '{' in the first column. If your '{'
+is not in the first column then try this mapping: >
+   :map [[ ?{<CR>w99[{
+
 ==============================================================================
 TROUBLESHOOTING                            *context_complete-troubleshooting*
 
+First of all, be sure to read the |context_complete-setup| section carefully.
+
 I expect this script to (mostly) work with many Languages, but the script has
 only been tested with Vera, C++ and C so far.  If it doesn't work well for the
-language you are using, then please let me know!  Also, if you have some
-sample Java code that I could test this script on then I would appreciate
-seeing it!
+language you are using, then please let me know and send me some sample code!
 
-Vim's |gd| feature is used to find the definition of local variables.  If you
-are not satisfied with how well |gd| works, then just |map| it to something
-else!  But please see |gd| and |[[| for clues before you do that.
+If 'this.' does not complete properly, then the script isn't finding the
+current class properly. Try remapping the |[[| command.
+
+If you would like to help debug the code (you know you want to) then you can
+turn on debug information by setting $gbl{DBG} = 1 in context_complete.pl.
 
 ==============================================================================
 TODO                                                  *context_complete-todo*
 
-- test against java code.
 - continue context completion after a function, very much needed for C++ and
-  Java (var.getObject().<c-q>). This could be a little slow however...
+  Java (var.getObject().CTRL-Q). This could be a little slow however...
+- add new mapping to highlight parameter items in turn
+- make search patterns configurable - something like: "%t\s+%c::%f"
+- test against java code.
 - provide an option for a preview window with all the completion options.
-  Idea by Martin Stubenschrott
-- arrays can mess things up
-- complete 'this.<c-q>'
-- make object type guessing smarter - limit tag choices to members of the
-  current object
+  Suggestion by Martin Stubenschrott
 
 ==============================================================================
 VERSION HISTORY                             *context_complete-version-history*
 
+0.5 
+    - completes 'this.CTRL-Q'
+    - completes 'super.CTRL-Q'
+    - object type guessing is smarter - limits tag choices to members of the
+      current object. CTRL-L may now be obsolete.
+    - more bug fixes and more documentation.
 0.4
     - implemented a basic understanding of class inheritance.
     - tag searching is now _much_ faster - uses binary searching whenever
       possible, plus a few other speed enhancements.
     - function parameter completions are given when the fill name is provided,
-      as in: util.do_stuff(<c-q>
-    - completion suggestions are now sorted
+      as in: 'util.do_stuff(CTRL-Q'
+    - completion options are now sorted
 0.3
     - static members are completed: i.e. ClassName::completeThis...
     - C structs are now understood and treated like classes

@@ -1,7 +1,7 @@
 " Author: Dave Eggum (deggum@synopsys.com)
-" Version: 0.4
+" Version: 0.5
 
-" See ":help contex_complete" for documentation
+" See ":help context_complete.txt" for documentation
 
 inoremap <silent> <C-Q> <ESC>:perl -w &context_complete()<cr>
 inoremap <silent> <C-J> <ESC>:perl -w &do_next_entry("N")<cr>
@@ -23,7 +23,6 @@ function! FindLocalVariableLine(tag)
    " screen
    normal H
    let topline = line(".")
-   call cursor(linenum, col)
 
    " Use vim's "godo local declaration" feature (gd) and determine the variable type
    call cursor(linenum, searchcol)
@@ -55,5 +54,45 @@ function! FindLocalVariableLine(tag)
    set nolazyredraw
    return line
 endfunction
+
+" returns the line and column number, and the result of the command, if any
+function! InvisibleMotion(assign_result)
+   " save the current spot
+   let linenum = line(".")
+   let col = col(".")
+   set lazyredraw
+
+   " save the current spot
+   let linenum = line(".")
+   let col = col(".")
+
+   " find the topline in order to restore the cursor position relative to the
+   " screen
+   normal H
+   let topline = line(".")
+   call cursor(linenum, col)
+
+   " echom "context_complete_motion_command:" g:context_complete_motion_command
+   if (a:assign_result)
+      exec "let result = ".g:context_complete_motion_command
+   else
+      exec g:context_complete_motion_command
+      let result = ""
+   endif
+
+   let l = line(".")
+   let c = col(".")
+
+   " restore the cursor and screen positions
+   call cursor(topline, 0)
+   normal zt
+
+   " restore the cursor to the starting position
+   call cursor(linenum, col)
+   set nolazyredraw
+
+   return l.",".c.":".result
+endfunction
+   " :map [[ ?{<CR>w99[{
 
 " vim: fdm=indent:sw=3:ts=3
