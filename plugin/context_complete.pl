@@ -1,232 +1,225 @@
 perl << .
-# use strict;
+use strict;
+use lib "$ENV{HOME}/.vim/plugin";
+use Search::Pattern 1.00;
+use Search::Tags 1.00;
+use Search::Complete 1.00;
 
-%gbl;
-
-$gbl{DBG} = 0;
+$main::dbg = 0;
 
 sub dprint() {
-   $gbl{DBG} = 0 unless defined $gbl{DBG};
-   if ($gbl{DBG}) {
+   $main::dbg = 0 unless defined $main::dbg;
+   if ($main::dbg) {
       print "@_\n";
    }
 }
 
-sub get_tags_file() {
-   my $tags = VIM::Eval("&tags");
-   my @files = split(/,/, $tags);
-   my $tagfile;
-   while ($tagfile = shift @files) {
-      return $tagfile if (-r $tagfile);
+# cannot run this routine with 'use strict'!
+sub print_object() {
+   my ($name) = @_;
+   my $o = $$name;
+
+   foreach my $key (sort keys %{$o}) {
+      my $val = $o->{$key};
+      $val = join "|", @{$val} if ($val =~ /ARRAY/);
+      print "$name"."->{$key} = >$val<\n";
    }
-
-   return "";
 }
 
-sub get_function_definition() {
-   my ($line) = shift;
-   return $2 if ($line =~ /^[\w\s]*(task|function).*?(\w+)::/); # a vera task/function
-   return $1 if ($line =~ /^\w+\s+(\w+)::/); # a c++ function def
-   return $1 if ($line =~ /^(\w+)::~?\1/); # a c++ constructor
-   return undef;
+sub _msg {
+   my ($m, $hl) = @_;
+
+   VIM::DoCommand("echohl ModeMsg");
+   VIM::DoCommand("echon '-- Context completion (^J^K) '");
+   VIM::DoCommand("echohl $hl");
+   VIM::DoCommand("echon '$m\n'");
+   VIM::DoCommand("echohl None");
 }
 
-sub find_definition() {
+sub msg {
+   &_msg(shift, "Question");
+}
+
+sub error {
+   &_msg(shift, "ErrorMsg");
+}
+
+sub warn {
+   &_msg(shift, "WarningMsg");
+}
+
+sub find_variable_type() {
    my $line = shift;
 
    $line =~ s/[\*&]//g;
    $line =~ s/.*;\s*//g;
    $line =~ s/.*\(//;
    $line =~ s/\w+\s*,//g;
-   $line =~ s/\breturn\b//;
+   my $pat = $main::pattern->ignore_keywords;
+   $line =~ s/\b$pat\b//g;
 
-   if ($line =~ /(\w[\w:]*)\s*$/) {
-      return $1;
-   }
-   else {
-      return undef;
-   }
+   my ($ret) = ($line =~ /(\w[\w:]*)\s*$/);
+   return $ret;
 }
 
 # returns an empty string if no type is found
 sub find_local_type() {
-   my($tag) = $gbl{BEFORE} =~ /.*\b(\w+)/;
+   my $tag = $main::complete->tag;
    my $val = VIM::Eval("FindLocalVariableLine(\"$tag\")");
-   $val = &find_definition($val);
+   $val = &find_variable_type($val);
    return $val;
 }
 
 sub find_tag_types() {
-   my ($file, $tag, $this) = @_;
+   my ($tag, $this) = @_;
    my (%types);
 
    &dprint("find_tag_types: looking in tags file for $tag");
-   open(TAGSFILE, $file);
-   seek TAGSFILE, 0, 2; # find EOF position
-   my $max = tell(TAGSFILE);
 
-   if (defined $this) {
+   if ($this) {
       &dprint("find_tag_types: only looking at definitions found in class(es) $this!");
       $this =~ s/ /|/g;
       $this = "($this)";
    }
-   elsif ($gbl{DBG}) {
-      print "find_tag_types: local class not found, seaching for all matches\n";
+   elsif ($main::dbg) {
+      print "find_tag_types: local class not provided, seaching for all matches\n";
    }
-   my $pos = &binary_search(0, $max, $tag, \&read_routine, TAGSFILE);
-   seek TAGSFILE, $pos, 0;
 
-   LABEL: while (<TAGSFILE>) {
+   $main::tags->binary_search($tag);
+
+   LABEL: while ($_ = $main::tags->next_line) {
+      &dprint("find_tag_types: looking at tag line: $_");
       if (/^($tag)\b/) {
          if (/c$/) {
             &dprint("find_tag_types: skipping class definition...");
          }
-         elsif (/\/\^(.*)\b$tag\b.*\$/) {
-            my $def = $1;
-            if (!defined $this || /class:$this/) {
-               &dprint("find_tag_types: calling find_definition($def)");
-               $def = &find_definition($def);
-               if (defined $def)
-               {
-                  &dprint("find_tag_types: found def >$def<");
-                  $types{$def} = 1;
-               }
+         elsif (!defined $this || /class:$this/) {
+            my $def;
+            if ($main::complete->is_method) {
+               ($def) = $_ =~ /\/\^(.*)\$/;
+               $def = $main::pattern->get_item($def, "%t");
             }
+            elsif (/\/\^(.*)\b$tag\b/) {
+               $def = &find_variable_type($1);
+            }
+            $types{$def} = 1 if ($def);
          }
       }
       else {
          last LABEL;
       }
    }
-   close TAGSFILE;
 
    return keys %types;
 }
 
 sub get_tag_types() {
-   my ($file, $tag, $delim) = @_;
+   my $tag = shift;
    my @supers;
 
-   if ($delim =~ /::/)
-   {
-      @supers = &find_super_classes($file, $tag);
-      $tag = "$tag @supers" unless ($#supers == -1);
-      &dprint("get_tag_types: static var, returning: $tag");
-      return $tag;
-   }
-
-   unless ($tag eq "this" || $tag eq "super") {
+   unless ($tag eq "this" || $tag eq "super" || $main::complete->is_method) {
       # first look for a local definition of this tag
       my $type = &find_local_type();
-      if (defined $type)
-      {
-         @supers = &find_super_classes($file, $type);
-         $type = "$type @supers" unless ($#supers == -1);
-         &dprint("get_tag_types: found local type, returning $type");
-         return $type;
-      }
-   }
-   &dprint("get_tag_types: looking for 'this' class...");
-   my $this = &find_this_class();
-   if (defined $this) {
-      @supers = &find_super_classes($file, $this);
-      $this = "$this @supers" unless ($#supers == -1);
+      &dprint("get_tag_types: got local type >$type<");
+      return $type if ($type);
    }
 
-   return $this if ($tag eq "this");
-   if ($tag eq "super") {
-      my @t = split(/ /, $this);
-      shift @t;
-      $this = "@t";
-      return $this;
+   my $this;
+   unless ($main::complete->is_method) {
+      &dprint("get_tag_types: looking for 'this' class...");
+      $this = &find_this_class();
+
+      return $this if ($tag =~ /(this|super)/);
    }
 
    &dprint("get_tag_types: looking for $tag in tags file...");
-   my @types = &find_tag_types($file, $tag, $this);
-   foreach my $t (@types) {
-      @supers = &find_super_classes($file, $t);
-      $t = "$t @supers" unless ($#supers == -1);
-   }
+   my @types = &find_tag_types($tag, $this);
+   push @types, $tag unless ($main::complete->is_method); # tag could be a static variable
+
    &dprint("get_tag_types: returning @types");
-   return @types;
+   return "@types";
 }
 
 sub _extract_member() {
-   my($file, $line, $pat, $classes) = @_;
-   my ($done) = 1;
-   my ($val) = undef;
+   my ($line, $fullpat) = @_;
+   my $val;
 
-   if ($line =~ /^($pat\w*)/) {
-      $done = 0;
-      my $fullpat = $1;
-      if ($line =~ /:$classes/)
-      {
-         # find a complete function
-         if ($line =~ /($fullpat\s*\(.*?\))/) {
-            $val = $1;
-         }
-         # find a partial function
-         elsif ($line =~ /($fullpat\s*\(.*)\$/) {
-            my $m = &find_rest_of_prototype($file, $line);
-            $val = "$1$m";
-         }
-         # find a variable
-         else {
-            $val = $fullpat;
-         }
-      }
+   # find a complete function
+   if ($line =~ /($fullpat\s*\(.*?\))/) {
+      $val = $1;
    }
-
-   wantarray ? ($done, $val) : $val;
+   # find a partial function
+   elsif ($line =~ /($fullpat\s*\(.*)\$/) {
+      $val = "$1" .  &find_rest_of_prototype($line);
+   }
+   # find a variable
+   else {
+      $val = $fullpat;
+   }
+   $val =~ s/\s+/ /g;
+   $val =~ s/\s\(/(/;
+   return $val;
 }
 
-sub get_members_of_class() {
-   my ($file, $classes, $pat) = @_;
+sub get_members_of_type() {
+   my $classes = shift;
 
-   $classes =~ s/ /|/g;
-   $classes = "($classes)";
-   &dprint("get_members_of_class: looking for pat:$pat. in classes:$classes.");
+   my $pat = $main::complete->pat;
+   &dprint("get_members_of_type: looking for pat>$pat< in classes>$classes<");
 
    my (%members);
-   open(TAGSFILE, $file);
-   if (length $pat == 0) {
-      # find all members of this object... forced to do a linear search through
-      # the entire file =(
-      while (<TAGSFILE>) {
-         my $val = &_extract_member($file, $_, '\w+', $classes);
-         $members{$val} = 1 if (defined $val);
-      }
-   }
-   else {
-      # do a binary search
-      seek TAGSFILE, 0, 2; # find EOF position
-      my $max = tell(TAGSFILE);
+   if ($pat) {
+      # do a binary search through the tags file
       my $p = $pat;
       $p =~ s/\(//;
 
-      my $pos = &binary_search(0, $max, $p, \&read_routine, TAGSFILE);
-      seek TAGSFILE, $pos, 0;
+      $main::tags->binary_search($p);
 
+      $classes =~ s/ /|/g;
+      $classes = "($classes)";
       $pat =~ s/\(/\\b/;
-      LABEL: while (<TAGSFILE>) {
-         my ($done, $val) = &_extract_member($file, $_, $pat, $classes);
-         if ($done) {
-            last LABEL;
+      LABEL: while ($_ = $main::tags->next_line) {
+         if (/^($pat\w*)/) {
+            my $fullpat = $1;
+            if (/:$classes/)
+            {
+               my $val = &_extract_member($_, $fullpat);
+               $members{$val} = 1;
+            }
          }
-         elsif (defined $val) {
-            $members{$val} = 1;
+         else {
+            last LABEL;
          }
       }
    }
-   close TAGSFILE;
-   my @members = keys %members;
-   return sort @members;
+   else {
+      # find all members of this object... search through the cache
+      # file instead
+      my @class = split / /, $classes;
+      while (my $c = shift @class) {
+         $main::cache->binary_search($c);
+         LABEL: while ($_ = $main::cache->next_line) {
+            if (/^$c (\w+)/) {
+               my $val = &_extract_member($_, $1);
+               $members{$val} = 1;
+            }
+            else {
+               last LABEL;
+            }
+         }
+      }
+   }
+   my @members = sort keys %members;
+   &dprint("get_members_of_type: found members: ".join "|", @members);
+   $main::complete->clear_members;
+   $main::complete->members(@members);
 }
 
 sub find_rest_of_prototype() {
-   my ($tagfile, $line) = @_;
+   my $line = shift;
+   my $tagfile = $main::tags->filename;
 
-   my ($file) = $line =~ /\w+\s+(\S+)/;
+   my ($file) = $line =~ /(\S+)\s+\/\^/;
 
    if ($file !~ /^\//) {
       # this isn't an absolute path
@@ -234,7 +227,7 @@ sub find_rest_of_prototype() {
       $file =~ s/tags//;
    }
    if (!-r $file) {
-      VIM::Msg("Cannot find file $file");
+      &error("Cannot find file $file");
       return "";
    }
 
@@ -265,224 +258,87 @@ sub find_rest_of_prototype() {
    return $rest;
 }
 
-sub study_line() {
-   my $g = shift;
-   my $col;
-   ($g->{LNUM}, $col) = $curwin->Cursor();
-   my $line = $curbuf->Get($g->{LNUM});
-   $g->{AFTER} = substr($line, $col+1);
-   $line = substr($line, 0, $col+1);
-
-   $g->{BEFORE} = $line;
-
-   $line =~ s/^\s+//;
-   $line =~ s/\s+$//;
-   $line =~ s/\s+\(/(/;
-
-   my @tags = split(/([\. \(]|->|::)/, $line);
-   if ($g->{DBG}) {
-      foreach (@tags) {
-         print "study_line: split: $_\n";
-      }
-   }
-
-   $g->{DELIM} = undef;
-   if ($line =~ /(\.|->|::)$/)
-   {
-      # looking for all members of this tag
-      $g->{PAT} = "";
-      $g->{DELIM} = pop @tags; # pop delim
-      $g->{TAG} = pop @tags;
-   }
-   elsif ($line =~ /(\.|->|::)/)
-   {
-      # looking for only members that start with the pattern after the . or ->
-      $g->{PAT} = quotemeta(pop @tags);
-      if ($g->{PAT} =~ /\(/) {
-         # the full function name is provided, just provide options for the
-         # parameter list
-         $g->{PAT} = pop @tags;
-         $g->{PAT} = "$g->{PAT}(";
-         $g->{DELIM} = pop @tags;
-         $g->{DELIM} = "$g->{DELIM}\(";
-         $g->{TAG} = pop @tags;
-         $g->{BEFORE} =~ s/(\.|->|::).*$/$1/;
-      }
-      else {
-         $g->{BEFORE} =~ s/(\.|->|::)$g->{PAT}\s*$/$1/;
-         $g->{DELIM} = pop @tags;
-         $g->{TAG} = pop @tags;
-      }
-   }
-
-   &dprint("study_line: lnum:$g->{LNUM},before:$g->{BEFORE},after:$g->{AFTER},tag:$g->{TAG},pat:$g->{PAT},delim:$g->{DELIM}.");
-}
-
 sub find_super_classes() {
-   my ($file, $class) = @_;
+   my $class = shift;
    my ($super, @supers);
 
-   open(TAGSFILE, $file) || die "can't open $file!\n";
-   seek TAGSFILE, 0, 2; # find EOF position
-   my $max = tell(TAGSFILE);
-
+   my $t = $main::tags->filename;
+   my $c = $main::cache->filename;
    do {
-      $super = "";
-      my $pos = &binary_search(0, $max, $class, \&read_routine, TAGSFILE);
-      seek TAGSFILE, $pos, 0;
-      LABEL: while (<TAGSFILE>) {
-         if (/^$class\b/) {
-            if (/c$/ && /^$class\b/ && /(public|private|protected|extends)\s+(\w+)/)
-            {
-               $super = $2;
-               push @supers, $super;
-               $class = $super;
+      undef $super;
+      $main::tags->binary_search($class);
 
-               last LABEL;
+      LABEL: while ($_ = $main::tags->next_line) {
+         if (/^$class\b/) {
+            if (/c$/)
+            {
+               my ($stop, $val) = $main::pattern->get_item($_, "%s");
+               if ($stop) {
+                  last LABEL;
+               }
+               elsif ($val) {
+                  $super = $val;
+                  push @supers, $val;
+                  $class = $val;
+                  last LABEL;
+               }
             }
          }
          else {
             last LABEL;
          }
       }
-   } while (length $super != 0);
-   close TAGSFILE;
+   } while ($super);
 
    return @supers;
 }
 
-# only compares the $target with the first word in the tag file.
-sub read_routine() {
-   my ($handle, $target, $pos) = @_;
-   my ($compare, $newpos);
-
-   my $line;
-   if (defined $pos) {
-      seek $handle, $pos, 0;
-      $line = <$handle>; # assume the first line is garbage
-   }
-   $newpos = tell($handle);
-   $line = <$handle>;
-
-   ($line) = $line =~ /(\S+)/;
-
-   $compare = $target cmp $line;
-   return ($compare, $newpos);
-}
-
-# this subroutine is lifted from the Search::Binary module
-sub binary_search {
-	my $posmin = shift;
-	my $posmax = shift;
-	my $target = shift;
-	my $readfn = shift;
-	my $handle = shift;
-	my $smallblock = shift || 512;
-
-	my ($x, $compare, $mid, $lastmid);
-	my ($seeks, $reads);
-
-	# assert $posmin <= $posmax
-
-	$seeks = $reads = 0;
-	$lastmid = int(($posmin + $posmax)/2)-1;
-	while ($posmax - $posmin > $smallblock) {
-		# assert: $posmin is the beginning of a record
-		# and $target >= index value for that record 
-		$seeks++;
-		$x = int(($posmin + $posmax)/2);
-		($compare, $mid) = &$readfn($handle, $target, $x);
-		unless (defined($compare)) {
-			$posmax = $mid;
-         next;
-      }
-      last if ($mid == $lastmid);
-      if ($compare > 0) {
-         $posmin = $mid;
-      } else {
-         $posmax = $mid;
-      }
-      $lastmid = $mid;
-	}
-
-	# Switch to sequential search.
-
-	$x = $posmin;
-	while ($posmin <= $posmax) {
-
-		# same loop invarient as above applies here
-
-		$reads++;
-		($compare, $posmin) = &$readfn($handle, $target, $x);
-		last unless (defined($compare) && $compare > 0);
-		$x = undef;
-	}
-	wantarray ? ($posmin, $seeks, $reads) : $posmin;
-}
-
-sub in_complete_mode() {
-   my $start = shift;
-
-   unless (defined $gbl{IN_COMPLETE_MODE}) {
-      $gbl{IN_COMPLETE_MODE} = $start;
-      return $gbl{IN_COMPLETE_MODE};
-   }
-   if ($gbl{IN_COMPLETE_MODE} == 0) {
-      return $gbl{IN_COMPLETE_MODE};
-   }
-
-   my ($l, $c) = $curwin->Cursor();
-   if ($l == $gbl{LNUM} && $c == $gbl{COL}) {
-      $gbl{IN_COMPLETE_MODE} = 1;
-   }
-   elsif ($gbl{COL} == -1) {
-      $gbl{IN_COMPLETE_MODE} = 0;
-   }
-   else {
-      $gbl{IN_COMPLETE_MODE} = 0;
-   }
-   return $gbl{IN_COMPLETE_MODE};
-}
-
 sub do_next_entry() {
    my $direction = shift;
-   if ($direction =~ /F/) {
-      $gbl{MEMBER_INDEX} = 0;
-      $gbl{IN_COMPLETE_MODE} = 1;
-   }
-   elsif ($direction =~ /N/) {
-      if (&in_complete_mode(0)) {
-         $gbl{MEMBER_INDEX}++;
-         $gbl{MEMBER_INDEX} = 0 if ($gbl{MEMBER_INDEX} > $#{$gbl{MEMBERS}});
-      }
-      else {
+   my $next_type;
+   if ($direction == 0 || $main::complete->members == 0) {
+      $next_type = $main::complete->next_type;
+
+      &get_members_of_type($next_type);
+
+      if ($main::complete->members == 0)
+      {
+         # &error("Pattern not found");
+         &error("No members found for $next_type");
          &leave_in_insert_mode();
          return;
       }
    }
-   elsif ($direction =~ /P/) {
-      if (&in_complete_mode(0)) {
-         $gbl{MEMBER_INDEX}--;
-         $gbl{MEMBER_INDEX} = $#{$gbl{MEMBERS}} if ($gbl{MEMBER_INDEX} < 0);
+   my $newline = $main::complete->next_completion($direction, $main::curwin->Cursor());
+   if ($newline) {
+      my ($lnum, $col) = $main::complete->spot;
+
+      $main::curbuf->Set($lnum, $newline);
+      $main::curwin->Cursor($lnum, $col);
+
+      my $item = $main::complete->memberindex;
+      my $total = $main::complete->members - 1;
+      if ($next_type) {
+         $next_type =~ s/ /<-/g;
+         &msg("type $next_type");
+      }
+      elsif ($item == 0) {
+         &warn("Back at original");
       }
       else {
-         &leave_in_insert_mode();
-         return;
+         &msg("match $item of $total");
       }
    }
 
-   my $newline = "$gbl{BEFORE}${$gbl{MEMBERS}}[$gbl{MEMBER_INDEX}]";
-   $gbl{COL} = (length $newline) - 1;
-   $newline .= $gbl{AFTER};
+   # &print_object("main::complete");
+   # &print_object("main::pattern");
 
-   $curbuf->Set($gbl{LNUM}, $newline);
-   $curwin->Cursor($gbl{LNUM},$gbl{COL});
    &leave_in_insert_mode();
 }
 
 sub leave_in_insert_mode() {
-   my ($linenum, $col) = $curwin->Cursor();
-   my $line = $curbuf->Get($linenum);
+   my ($linenum, $col) = $main::curwin->Cursor();
+   my $line = $main::curbuf->Get($linenum);
 
    if (length $line == $col+1) {
       VIM::DoCommand("startinsert!");
@@ -493,117 +349,173 @@ sub leave_in_insert_mode() {
    }
 }
 
-sub use_next_tag() { 
-   $gbl{TYPEINDEX}++;
-   $gbl{TYPEINDEX} = 0 if ($gbl{TYPEINDEX} > $#{$gbl{TYPES}});
-
-   @{$gbl{MEMBERS}} = &get_members_of_class($gbl{TAGSFILE}, ${$gbl{TYPES}}[$gbl{TYPEINDEX}], $gbl{PAT});
-   my $found = $#{$gbl{TYPES}} + 1;
-   my $index = $gbl{TYPEINDEX} + 1;
-   if ($#{$gbl{MEMBERS}} == -1)
-   {
-      VIM::Msg("No members for type: ${$gbl{TYPES}}[$gbl{TYPEINDEX}]. ($index of $found definitions)");
-      &leave_in_insert_mode();
-      return;
-   }
-   my $t = ${$gbl{TYPES}}[$gbl{TYPEINDEX}];
-   $t =~ s/ /<-/g;
-   VIM::Msg("members for type: $t. ($index of $found definitions)");
-
-   push @{$gbl{MEMBERS}}, $gbl{PAT};
-   &do_next_entry("F");
-}
-
 sub find_this_class() {
-   VIM::DoCommand("let g:context_complete_motion_command = 'normal [['");
-   my $val = VIM::Eval("InvisibleMotion(0)");
+   my ($stop, $val);
+   my ($linenum, $col) = $main::curwin->Cursor();
+   LABEL: while ($linenum > 0) {
+      my $line = $main::curbuf->Get($linenum);
 
-   my ($linenum, $col, $passed) = $val =~ /(\d+),(\d+)/;
-   # print "find_this_class: line $linenum, col $col\n";
-   unless ($linenum == 1) {
-      my $continue = 1;
-      FIND: while (1) {
-         my $line = $curbuf->Get($linenum);
-         &dprint("find_this_class: looking at line $line");
-         if ($line =~ /\(/) {
-            if ($line =~ /(\w+)::/) {
-               # found class type
-               &dprint("find_this_class: found 'this' class: $1");
-               return $1;
-            }
-            else {
-               return undef;
-            }
-         }
-         elsif ($line =~ /^\s*$/) {
-            # line is blank, failed
-            &dprint("find_this_class: blank line found, break");
-            last FIND;
-         }
-         elsif ($line =~ /}/) {
-            # found the beginning of the previous function, failed
-            &dprint("find_this_class: previous func found, break");
-            last FIND;
-         }
-         elsif ($linenum == 1) {
-            &dprint("find_this_class: found top of file, aborting");
-            return undef;
-         }
+      &dprint("find_this_class: looking at line:$line");
+      ($stop, $val) = $main::pattern->get_item($line, "%c");
+      if ($stop) {
+         return undef;
       }
-      continue {
-         $linenum = $linenum - 1;
+      elsif ($val) {
+         return $val;
       }
    }
-
-   &dprint("find_this_class: did not find func def, searching backwards for 'class'");
-   VIM::DoCommand('let g:context_complete_motion_command = "search(\'^class\\\>\', \"bW\")"');
-   my $val = VIM::Eval("InvisibleMotion(1)");
-   ($linenum, $col, $passed) = $val =~ /(\d+),(\d+):(\d)/;
-   if ($passed) {
-      my $line = $curbuf->Get($linenum);
-      my($class) = $line =~ /class\s+(\w+)/;
-      &dprint("find_this_class: search passed, found class: $class");
-      return $class
+   continue {
+      $linenum -= 1;
    }
-
    return undef;
 }
 
+sub create_cache_file {
+   my $cache = shift;
+   open(H, "| sort > $cache") or die "Can't open cache file $cache! $!\n";
+
+   &msg("Updating tag cache file. Please wait...");
+   $main::tags->reset;
+   my $fn = $main::tags->filename;
+   while ($_ = $main::tags->next_line) {
+      if (/\s\w\s+class:/) {
+         s/(.*)\s+\w\s+class:(\S+)/$2 $1/;
+         print H;
+      }
+   }
+
+   close H;
+}
+
+sub remap_esc {
+   VIM::DoCommand("inoremap <silent> <ESC> <ESC>:perl -w &esc_pressed<cr>");
+}
+
+sub esc_pressed {
+   $main::complete->leave_complete_mode;
+   VIM::DoCommand("iunmap <silent> <ESC>");
+}
+
+sub setup_tags_file {
+   my $setting = VIM::Eval("&tags");
+   my $tagsfile = Search::Tags->get_tags_file($setting);
+   unless ($tagsfile) {
+      &error("No tags file found!");
+      &leave_in_insert_mode();
+      return 0;
+   }
+   if (defined $main::tag_objects{$tagsfile}) {
+      $main::tags = $main::tag_objects{$tagsfile};
+      $main::cache = $main::cache_objects{$tagsfile};
+
+      if ($main::tags->check_for_updates) {
+         &create_cache_file($main::cache->filename);
+         $main::cache->check_for_updates;
+      }
+   }
+   else {
+      $main::tags = Search::Tags->new($tagsfile);
+      $main::tag_objects{$tagsfile} = $main::tags;
+
+      my $cache = "$tagsfile.cache";
+
+      if (not -e $cache) {
+         &create_cache_file($cache);
+      }
+      else {
+         my (@info) = stat $cache;
+         my $cache_mtime = $info[9];
+
+         my $tag_mtime = $main::tags->mtime;
+
+         if ($tag_mtime > $cache_mtime) {
+            &create_cache_file($cache);
+         }
+      }
+
+      $main::cache = Search::Tags->new($cache);
+      $main::cache_objects{$tagsfile} = $main::cache;
+   }
+   # &print_object("main::tags");
+   # &print_object("main::cache");
+   return 1;
+}
+
+sub setup_search_patterns {
+   my $ok = VIM::Eval("exists('b:ContextCompleteSearchPattern')");
+   my $pat;
+   if ($ok) {
+      $pat = VIM::Eval("b:ContextCompleteSearchPattern");
+   }
+   $ok = VIM::Eval("exists('b:ContextCompleteIgnoreKeywords')");
+   my $ignore;
+   if ($ok) {
+      $ignore = VIM::Eval("b:ContextCompleteIgnoreKeywords");
+   }
+   $main::pattern = Search::Pattern->new($pat, $ignore); # ok if params are undef
+   # &print_object("main::pattern");
+}
+
+sub setup_tags {
+   my $tag = $main::complete->tag;
+   my $all = &get_tag_types($tag);
+   unless ($all) {
+      &error("No types found for $tag!");
+      &leave_in_insert_mode();
+      return 0;
+   }
+
+   my @all = split / /, $all;
+   foreach my $t (@all) {
+      my @supers = &find_super_classes($t);
+      if (@supers) {
+         $t = (($tag eq "super") ? "" : "$t " ) . "@supers";
+      }
+   }
+
+   $main::complete->types(@all);
+   &dprint("context_complete: found these types: @all");
+   return 1;
+}
+
+sub next_type() { 
+   context_complete(0);
+}
+
+sub next_match {
+   context_complete(1);
+}
+
+sub prev_match {
+   context_complete(-1);
+}
+
 sub context_complete() {
-   $gbl{COL} = -1 unless (defined $gbl{COL});
-   if (&in_complete_mode(0)) {
+   my ($dir) = @_;
+   my (@pos) = $main::curwin->Cursor();
+   if ($main::complete && $main::complete->in_complete_mode(@pos)) {
       &dprint("context_complete: already in complete mode...");
-      &do_next_entry("N");
+      &do_next_entry($dir);
       return;
    }
 
-   &study_line(\%gbl);
+   my $line = $main::curbuf->Get($pos[0]);
+   $main::complete = Search::Complete->new(@pos, $line);
 
-   unless (defined $gbl{DELIM})
-   {
-      &leave_in_insert_mode();
-      return;
-   }
+   # do this every time because the 'tags' setting can change anytime
+   # without notice
+   &setup_tags_file or return;
 
-   $gbl{TAGSFILE} = &get_tags_file;
-   if (length $gbl{TAGSFILE} == 0) {
-      VIM::Msg("No tags file found!");
-      &leave_in_insert_mode();
-      return;
-   }
+   # also do this every time because the buffer filetype can easily change
+   &setup_search_patterns;
 
-   @{$gbl{TYPES}} = &get_tag_types($gbl{TAGSFILE}, $gbl{TAG}, $gbl{DELIM});
-   if ($#{$gbl{TYPES}} == -1) {
-      VIM::Msg("No definition found for variable $gbl{TAG}!");
-      &leave_in_insert_mode();
-      return;
-   }
-   &dprint("context_complete: found these types: @{$gbl{TYPES}}");
+   &remap_esc;
 
-   $gbl{TYPEINDEX} = -1;
-   &use_next_tag();
+   &setup_tags or return;
+
+   &do_next_entry($dir);
 }
 .
 
-" vim: fdm=indent:sw=3:ts=3:foldignore=
+" vim: fdm=indent:sw=3:ts=3:fdi=
 

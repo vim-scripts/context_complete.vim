@@ -1,15 +1,18 @@
 *context_complete.txt*    Context-Sensitive Word Completion
 
 		By Dave Eggum (deggum@synopsys.com)
-			    Version: 0.5
-		Last Change: Mon Jan 31 10:07:01 PST 2005
+			    Version: 1.00
+		Last Change: Wed Mar  2 10:38:23 PST 2005
 
 Contents:
-   Usage..............|context_complete-usage|
-   Setup..............|context_complete-setup|
-   Troubleshooting....|context_complete-troubleshooting|
-   TODO...............|context_complete-todo|
-   Version History....|context_complete-version-history|
+   Usage..............................................|context_complete-usage|
+   Setup..............................................|context_complete-setup|
+   Customizing For Your Language................|context_complete-customizing|
+     Keywords To Ignore......................|context_complete-ignoring-words|
+     Searching For Local Variables..........|context_complete-local-variables|
+   Troubleshooting..........................|context_complete-troubleshooting|
+   TODO................................................|context_complete-todo|
+   Version History..........................|context_complete-version-history|
 
 The focus of this script is to provide context-sensitive word completion.  So
 far, completion is limited members of an object, static classes (i.e.
@@ -18,20 +21,20 @@ CUtils::complete_this) and structs.
 ==============================================================================
 USAGE                                                 *context_complete-usage*
 
-The usage of this script is modeled after vim's |insert_expand| feature.
+The usage of this script is modeled after vim's |compl-generic| feature.
 
 Suppose you have an instance of an object (o), and you've typed:
 
 	o.set_ ~
 
-While you are still in insert mode, press CTRL-Q, and this script will then
+While you are still in insert mode, press CTRL-J, and this script will then
 look up the first member of that object that starts with "set_" and complete
 it for you, like this:
 
 	o.set_range(integer max, integer min) ~
 
-If this isn't the completion that you want, then type CTRL-Q again (or CTRL-J)
-for the next member that starts with "set_":
+If this isn't the completion that you want, then press CTRL-J again for the
+next member that starts with "set_":
 
 	o.set_name(string name) ~
 
@@ -46,15 +49,28 @@ found the one you want.
 Occasionally there are several matching contenders for the object type. Press
 CTRL-L to cycle through them.
 
-The object can also be replaced with a struct, 'this', or 'super'.
+The object can also be replaced with a struct, class, 'this', or 'super'. 
+
+Completions can also be made after the open parentheses:
+
+	o.set_range(<c-j> ~
+
+Or after the function:
+
+	o.get_name().compar<c-j> ~
+
+Pressing CTRL-S will skip through the function parameters, visually selecting
+each in turn - useful for filling in the parameters after completing a
+function.
 
 ==============================================================================
 SETUP                                               *context_complete-setup*
 
 This script relies heavily on exuberant ctags and the perl extension in vim.
 If you do not have ctags, then you can pick it up for free at ctags.sf.net
-(you should be using it anyway... see |tags|).  If you do not know if you have
-the perl extension, try >
+(you should be using it anyway... see |tags|).
+
+If you do not know if you have the perl extension, try >
 
 	:version
 
@@ -63,7 +79,7 @@ If you see "+perl" in the output, then you've got it. If you don't, then see
 perl feature enabled. See the documentation provided with the vim distribution
 for instructions on how to do that.
 
-You must run ctags on your code, enabling as many kinds as possible is a good
+You must run ctags on your code. Enabling as many kinds as possible is a good
 idea. Try
 
 	% ctags --list-kinds=all ~
@@ -73,51 +89,132 @@ set the |'tags'| option to point to your tags file.
 
 Binary searching is used for speedy tag lookups. The caveat of this is that
 the tags file must be sorted - which ctags does for you by default - just
-don't turn it off.
+don't turn that feature off.
 
 Notice that after time, your tags file will be out of date with the current
 version of your code. All you have to do is run ctags again to get a new
-picture of your environment. Vim's built-in tag features requires that you do
+picture of your environment. Vim's built-in tag features requires you to do
 this anyway...
 
-Vim's |gd| and |[[| motions are used to find the definition of local variables
-and the start of the current function.  If you are not satisfied with how well
-they work for your language, then just |map| those commands to something else!
-But please see |gd| and |[[| for clues before you do that.
+CUSTOMIZING FOR YOUR LANGUAGE                   *context_complete-customizing*
+
+C/C++ will work right out of the box. If you are programming in a different
+language then you can take advantage of several hooks to customize how
+identifiers are found.
+
+Search patters are used when looking for function types and class names.
+Fortunately, the search patterns can be customized...
+
+In your ftplugin/<lang>_extra.vim file, add >
+
+	let b:ContextCompleteSearchPattern = '<pattern>'
+
+where <pattern> is in this form: >
+
+	/<search pattern>/[stop pattern][, /<next search pattern>/...]
+<
+<search pattern> is any perl pattern, see
+
+	% man perlre ~
+
+The pattern should also contain some of the following:
+
+	%t -> specifies the function type (the return value)
+	%f -> specifies the function name
+	%c -> specifies the class name
+	%s -> specifies the super class
+
+For example, to find the function type and class names in a C++ program, you
+could use this pattern: >
+
+	/%t %c::%f/
+
+Spaces are converted to '\s+'. Tip: If you want a white-space to be optional, just
+specify the search pattern (\s*) instead of a space.
+
+[stop pattern] is optional. It specifies that searching should stop when the
+specified pattern is encountered (when applicable). If no stop pattern is
+given, then searching will stop when the top of the file is reached.
+
+You can specify as many search patterns as you want, just separate them with
+commas.
+
+Here are a few examples:
+
+C/C++ (default) >
+	let b:ContextCompleteSearchPattern = '/%t %c::%f/^}, /class %c(\s*:\s*(public|private|protected) %s)?/';
+
+Vera >
+	let b:ContextCompleteSearchPattern = '/(task|function %t.*?) (%c::)?%f/^}, /class %c( extends %s)?/'
+
+Java >
+	let b:ContextCompleteSearchPattern = '/(public|protected|private)? %t %f\s*\(/^}, /class %c( extends %s)?/'
+
+
+KEYWORDS TO IGNORE                          *context_complete-ignoring-words*
+
+You can specify which words should be ignored when searching for object types.
+In your ftplugin file, list the undesirables in the
+b:ContextCompleteIgnoreKeywords variable.
+
+For example:
+
+C/C++ (default) >
+	let b:ContextCompleteIgnoreKeywords = "public private protected class return"
+
+Vera >
+	let b:ContextCompleteIgnoreKeywords = "public private local task function class return"
+
+Tip: Just add keywords to your list as you find them causing you trouble,
+because not all keywords will!
+
+
+SEARCHING FOR LOCAL VARABLES               *context_complete-local-variables*
+
+Vim's |gd| motion is used to find the definition of local variables.  If you
+are not satisfied with how well it works for your language, then just |map|
+the command to something else!  But please see |gd| and |[[| for clues before
+you do that.
 
 For instance, |[[| searches backwards for '{' in the first column. If your '{'
-is not in the first column then try this mapping: >
-   :map [[ ?{<CR>w99[{
+is not in the first column then try this mapping instead: >
+
+	map [[ ?{<CR>w99[{
 
 ==============================================================================
 TROUBLESHOOTING                            *context_complete-troubleshooting*
 
 First of all, be sure to read the |context_complete-setup| section carefully.
 
-I expect this script to (mostly) work with many Languages, but the script has
-only been tested with Vera, C++ and C so far.  If it doesn't work well for the
-language you are using, then please let me know and send me some sample code!
+You should increase your |cmdheight| if you have to hit enter after every
+completion.
 
-If 'this.' does not complete properly, then the script isn't finding the
-current class properly. Try remapping the |[[| command.
+I expect this script to work with many languages, but the script has only been
+tested with Vera, Java, C++ and C so far.  If it doesn't work well for the
+language you are using, then please let me know!
 
-If you would like to help debug the code (you know you want to) then you can
-turn on debug information by setting $gbl{DBG} = 1 in context_complete.pl.
+If you would like to help debug the code (you know you want to...) then you
+can turn on debug information by setting $main::dbg = 1 at the top of
+context_complete.pl.
 
 ==============================================================================
 TODO                                                  *context_complete-todo*
 
-- continue context completion after a function, very much needed for C++ and
-  Java (var.getObject().CTRL-Q). This could be a little slow however...
-- add new mapping to highlight parameter items in turn
-- make search patterns configurable - something like: "%t\s+%c::%f"
-- test against java code.
-- provide an option for a preview window with all the completion options.
-  Suggestion by Martin Stubenschrott
+- none
 
 ==============================================================================
 VERSION HISTORY                             *context_complete-version-history*
 
+1.00
+    - added a tag cache file for mega-fast searching.
+    - context completion continues after a function, very much needed for c++ and
+      java (var.getObject().CTRL-J).
+    - search patterns and keywords are configurable.
+    - added a new mapping (CTRL-S) to highlight parameter items in turn
+    - tested against java code.
+    - "this" is now the assumed tag for completions without a tag.
+    - got rid of unnecessary CTRL-Q mapping.
+    - more bug fixes and more documentation.
 0.5 
     - completes 'this.CTRL-Q'
     - completes 'super.CTRL-Q'

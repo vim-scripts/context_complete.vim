@@ -1,12 +1,14 @@
 " Author: Dave Eggum (deggum@synopsys.com)
-" Version: 0.5
+" Version: 1.00
 
 " See ":help context_complete.txt" for documentation
 
-inoremap <silent> <C-Q> <ESC>:perl -w &context_complete()<cr>
-inoremap <silent> <C-J> <ESC>:perl -w &do_next_entry("N")<cr>
-inoremap <silent> <C-K> <ESC>:perl -w &do_next_entry("P")<cr>
-inoremap <silent> <C-L> <ESC>:perl -w &use_next_tag()<cr>
+inoremap <silent> <C-J> <ESC>:perl -w &next_match<cr>
+inoremap <silent> <C-K> <ESC>:perl -w &prev_match<cr>
+inoremap <silent> <C-L> <ESC>:perl -w &next_type<cr>
+nnoremap <silent> <C-S>      :call HighlightNextParam()<cr>
+vnoremap <silent> <C-S> <ESC>:call HighlightNextParam()<cr>
+inoremap <silent> <C-S> <ESC>:call HighlightNextParam()<cr>
 
 source $HOME/.vim/plugin/context_complete.pl
 
@@ -55,44 +57,16 @@ function! FindLocalVariableLine(tag)
    return line
 endfunction
 
-" returns the line and column number, and the result of the command, if any
-function! InvisibleMotion(assign_result)
-   " save the current spot
-   let linenum = line(".")
-   let col = col(".")
-   set lazyredraw
-
-   " save the current spot
-   let linenum = line(".")
-   let col = col(".")
-
-   " find the topline in order to restore the cursor position relative to the
-   " screen
-   normal H
-   let topline = line(".")
-   call cursor(linenum, col)
-
-   " echom "context_complete_motion_command:" g:context_complete_motion_command
-   if (a:assign_result)
-      exec "let result = ".g:context_complete_motion_command
+function! HighlightNextParam()
+   let line = getline(".")
+   let mark = matchstr(line, "[(,)]", col("."))
+   if mark == ")" || strlen(mark) == 0
+      exec "normal! F("
    else
-      exec g:context_complete_motion_command
-      let result = ""
+      exec "normal! f".mark
    endif
-
-   let l = line(".")
-   let c = col(".")
-
-   " restore the cursor and screen positions
-   call cursor(topline, 0)
-   normal zt
-
-   " restore the cursor to the starting position
-   call cursor(linenum, col)
-   set nolazyredraw
-
-   return l.",".c.":".result
+   let str = matchstr(line, "[,)]", col("."))
+   exec "normal! wvt".str
 endfunction
-   " :map [[ ?{<CR>w99[{
 
 " vim: fdm=indent:sw=3:ts=3
