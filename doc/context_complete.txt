@@ -1,0 +1,138 @@
+*context_complete.txt*    Context-Sensitive Word Completion
+
+		By Dave Eggum (deggum@synopsys.com)
+			    Version: 0.4
+		Last Change: Mon Jan 31 10:07:01 PST 2005
+
+Contents:
+   Usage..............|context_complete-usage|
+   Setup..............|context_complete-setup|
+   Troubleshooting....|context_complete-troubleshooting|
+   TODO...............|context_complete-todo|
+   Version History....|context_complete-version-history|
+
+The focus of this script is to provide context-sensitive word completion.  So
+far, completion is limited members of an object, static classes (i.e.
+CUtils::complete_this) and structs.
+
+==============================================================================
+USAGE                                                 *context_complete-usage*
+
+The usage of this script is modeled after vim's |insert_expand| feature and is
+best explained with an example...
+
+Suppose you have an instance of an object (o), and you've typed:
+
+	o.set_ ~
+
+While you are still in insert mode, press CTRL-Q, and this script will then
+look up the first member of that object that starts with "set_" and complete
+it for you, like this:
+
+	o.set_range(integer max, integer min) ~
+
+If this isn't the completion that you want, then type CTRL-Q again (or CTRL-J)
+for the next member that starts with "set_":
+
+	o.set_name(string name) ~
+
+and again for the next one:
+
+	o.set_value ~
+
+If you've gone too far then you can go back with CTRL-K. After each completion
+you are left in insert mode - so you can just continue typing when you've
+found the one you want.
+
+This script looks up the type of the object instance before the "." or "->" by
+first looking for a local definition, if it doesn't find one then it looks in
+the tag file. If it finds more than one object type in the tags file, then it
+will provide completions for the first one it finds.  If it chooses the wrong
+type, then press CTRL-L to move to the next object definition.
+
+==============================================================================
+SETUP                                               *context_complete-setup*
+
+This script relies heavily on exuberant ctags and the perl extension in vim.
+If you do not have ctags, then you can pick it up for free at ctags.sf.net
+(you should be using it anyway... see |tags|).  If you do not know if you have
+the perl extension, try >
+
+	:version
+
+If you see "+perl" in the output, then you've got it. If you don't, then see
+|perl-compiling| for (a little) help. You will need to recompile vim with the
+perl feature enabled. See the documentation provided with the vim distribution
+for instructions on how to do that.
+
+You must run ctags on your code, enabling as many kinds as possible is a good
+idea. Try
+
+	% ctags --list-kinds=all ~
+
+for a listing of all the options available for each language. You then need to
+set the |'tags'| option to point to your tags file.
+
+Binary searching is used for speedy tag lookups. The caveat of this is that
+the tags file must be sorted - which ctags does for you by default.
+
+Notice that after time, your tags file will be out of date with the current
+version of your code. All you have to do is run ctags again to get a new
+picture of your environment. Vim's built-in tag features requires that you do
+this anyway...
+
+==============================================================================
+TROUBLESHOOTING                            *context_complete-troubleshooting*
+
+I expect this script to (mostly) work with many Languages, but the script has
+only been tested with Vera, C++ and C so far.  If it doesn't work well for the
+language you are using, then please let me know!  Also, if you have some
+sample Java code that I could test this script on then I would appreciate
+seeing it!
+
+Vim's |gd| feature is used to find the definition of local variables.  If you
+are not satisfied with how well |gd| works, then just |map| it to something
+else!  But please see |gd| and |[[| for clues before you do that.
+
+==============================================================================
+TODO                                                  *context_complete-todo*
+
+- test against java code.
+- continue context completion after a function, very much needed for C++ and
+  Java (var.getObject().<c-q>). This could be a little slow however...
+- provide an option for a preview window with all the completion options.
+  Idea by Martin Stubenschrott
+- arrays can mess things up
+- complete 'this.<c-q>'
+- make object type guessing smarter - limit tag choices to members of the
+  current object
+
+==============================================================================
+VERSION HISTORY                             *context_complete-version-history*
+
+0.4
+    - implemented a basic understanding of class inheritance.
+    - tag searching is now _much_ faster - uses binary searching whenever
+      possible, plus a few other speed enhancements.
+    - function parameter completions are given when the fill name is provided,
+      as in: util.do_stuff(<c-q>
+    - completion suggestions are now sorted
+0.3
+    - static members are completed: i.e. ClassName::completeThis...
+    - C structs are now understood and treated like classes
+    - local variable definition detection is much better... it uses more of
+      vim's built-in features to figure it out. (yay!)
+    - more bug fixes.
+    - _removed_ the variable complete feature... the added complexity
+      wasn't worth it. Will put the feature back in if there is enough demand
+      for it.
+0.2
+    - tested with C++.
+    - object names can now be a local variable as well as a member variable.
+    - variables can now be expanded as well.
+    - added more documenation
+0.1
+    - initial release
+
+
+vim:tw=78:noet:ts=8:ft=help:norl:
